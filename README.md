@@ -87,7 +87,9 @@ After starting, open **http://localhost:8080** in your browser.
 
 ```
 LLMHardwareCalculator/
-  index.html   # Complete app (HTML + CSS + JS in a single file)
+  index.html   # HTML structure
+  style.css    # Styles (dark theme, layout, components)
+  script.js    # Application logic (i18n, calculation, HuggingFace search)
   server.sh    # Start/stop script for the local web server
   README.md    # This file
 ```
