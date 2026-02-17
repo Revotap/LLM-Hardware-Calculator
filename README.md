@@ -28,6 +28,19 @@ You configure the model architecture and settings on the left side, and the righ
 - **Per-GPU memory** when using multiple GPUs
 - **GPU recommendations** with color coding (green = fits, yellow = tight, red = insufficient)
 
+### HuggingFace Model Search
+
+A search field above the presets lets you search for any model on HuggingFace by name (e.g. "qwen 2.5", "llama 3", "mistral"). Results appear in a dropdown sorted by download count. Selecting a model automatically fetches its `config.json` and fills in the calculator inputs:
+
+- **hidden_size** → Hidden Size
+- **num_hidden_layers** → Layers
+- **num_attention_heads** → Attention Heads
+- **num_key_value_heads** → KV-Heads (auto-detects MHA/GQA/MQA)
+- **max_position_embeddings** → Context Length
+- **Parameter count** from safetensors metadata or estimated from architecture
+
+The search is debounced (300ms) and uses the public HuggingFace API directly from the browser — no backend or API key required.
+
 ### Presets
 
 Quick-load buttons for popular models: LLaMA 7B/13B/70B, Mistral 7B, Mixtral 8x7B, GPT-3 175B, Phi-2 2.7B, Qwen 72B.

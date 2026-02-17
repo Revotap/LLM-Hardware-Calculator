@@ -306,6 +306,105 @@
 
     .lora-section { display: none; }
     .lora-section.visible { display: block; }
+
+    .hf-search-wrapper {
+      position: relative;
+      margin-bottom: 1.2rem;
+    }
+
+    .hf-search-wrapper input[type="text"] {
+      width: 100%;
+      padding: 0.55rem 0.8rem 0.55rem 2.2rem;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .hf-search-wrapper input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    .hf-search-wrapper .search-icon {
+      position: absolute;
+      left: 0.7rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      pointer-events: none;
+    }
+
+    .hf-search-wrapper .search-spinner {
+      position: absolute;
+      right: 0.7rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: hf-spin 0.6s linear infinite;
+      display: none;
+    }
+
+    @keyframes hf-spin {
+      to { transform: translateY(-50%) rotate(360deg); }
+    }
+
+    .hf-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 4px;
+      max-height: 280px;
+      overflow-y: auto;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+
+    .hf-dropdown.visible { display: block; }
+
+    .hf-dropdown-item {
+      padding: 0.55rem 0.8rem;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+
+    .hf-dropdown-item:last-child { border-bottom: none; }
+
+    .hf-dropdown-item:hover {
+      background: rgba(108, 99, 255, 0.12);
+    }
+
+    .hf-dropdown-item .hf-model-name {
+      font-size: 0.85rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .hf-dropdown-item .hf-model-meta {
+      font-size: 0.73rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    .hf-dropdown-empty {
+      padding: 0.8rem;
+      text-align: center;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
   </style>
 </head>
 <body>
@@ -323,6 +422,13 @@
   <!-- Input Panel -->
   <div class="panel">
     <h2 id="h2Config"></h2>
+
+    <div class="hf-search-wrapper">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="hfSearch" data-i18n-placeholder="hf_search_placeholder" autocomplete="off">
+      <div class="search-spinner" id="hfSpinner"></div>
+      <div class="hf-dropdown" id="hfDropdown"></div>
+    </div>
 
     <div class="presets" id="presetBar">
       <button onclick="loadPreset('llama7b',this)">LLaMA 7B</button>
@@ -619,6 +725,11 @@ const I18N = {
     train_desc_full: 'Master Weights + Gradients + Adam Optimizer (1st/2nd Moment) each FP32',
     train_desc_lora: 'LoRA Adapter (r={rank}, {modules} modules, ~{pct}% of params) + Adam',
     kv_sub: 'KV-Heads: {kvh} ({ratio}% of Q-Heads), {bits} bit',
+    hf_search_placeholder: 'Search HuggingFace models...',
+    hf_no_results: 'No models found',
+    hf_downloads: 'downloads',
+    hf_loading: 'Loading model config...',
+    hf_error: 'Could not load model config',
   },
   de: {
     headerSub: 'Berechne VRAM- und Speicheranforderungen fuer Large Language Models',
@@ -674,6 +785,11 @@ const I18N = {
     train_desc_full: 'Master-Weights + Gradients + Adam-Optimizer (1st/2nd Moment) je FP32',
     train_desc_lora: 'LoRA-Adapter (r={rank}, {modules} Module, ~{pct}% der Parameter) + Adam',
     kv_sub: 'KV-Heads: {kvh} ({ratio}% von Q-Heads), {bits} bit',
+    hf_search_placeholder: 'HuggingFace-Modelle suchen...',
+    hf_no_results: 'Keine Modelle gefunden',
+    hf_downloads: 'Downloads',
+    hf_loading: 'Lade Modellkonfiguration...',
+    hf_error: 'Modellkonfiguration konnte nicht geladen werden',
   }
 };
 
@@ -701,6 +817,11 @@ function setLang(lang) {
   // Update select option texts
   document.querySelectorAll('[data-i18n-opt]').forEach(el => {
     el.textContent = t(el.getAttribute('data-i18n-opt'));
+  });
+
+  // Update placeholder texts
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
   });
 
   // Re-run calc to update dynamic strings
@@ -1041,6 +1162,237 @@ function calc() {
     rec.appendChild(tag);
   });
 }
+
+// ==================== HuggingFace Search ====================
+(function() {
+  const searchInput = $('hfSearch');
+  const dropdown = $('hfDropdown');
+  const spinner = $('hfSpinner');
+  let debounceTimer = null;
+  let abortCtrl = null;
+  let cachedModelData = {};
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const query = searchInput.value.trim();
+    if (query.length < 2) {
+      hideDropdown();
+      return;
+    }
+    debounceTimer = setTimeout(() => searchHF(query), 300);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideDropdown();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.hf-search-wrapper')) hideDropdown();
+  });
+
+  function hideDropdown() {
+    dropdown.classList.remove('visible');
+    spinner.style.display = 'none';
+  }
+
+  async function searchHF(query) {
+    if (abortCtrl) abortCtrl.abort();
+    abortCtrl = new AbortController();
+    spinner.style.display = 'block';
+
+    try {
+      const url = `https://huggingface.co/api/models?search=${encodeURIComponent(query)}&limit=15&filter=transformers&sort=downloads&direction=-1`;
+      const resp = await fetch(url, { signal: abortCtrl.signal });
+      if (!resp.ok) throw new Error('API error');
+      const models = await resp.json();
+
+      spinner.style.display = 'none';
+      cachedModelData = {};
+
+      if (models.length === 0) {
+        dropdown.innerHTML = `<div class="hf-dropdown-empty">${t('hf_no_results')}</div>`;
+        dropdown.classList.add('visible');
+        return;
+      }
+
+      dropdown.innerHTML = '';
+      models.forEach(model => {
+        cachedModelData[model.id] = model;
+        const item = document.createElement('div');
+        item.className = 'hf-dropdown-item';
+
+        const downloads = model.downloads != null ? formatDownloads(model.downloads) : '';
+        const paramSize = extractParamSize(model);
+
+        item.innerHTML = `
+          <div class="hf-model-name">${escapeHtml(model.id)}</div>
+          <div class="hf-model-meta">${[paramSize, downloads ? downloads + ' ' + t('hf_downloads') : ''].filter(Boolean).join(' · ')}</div>
+        `;
+        item.addEventListener('click', () => selectModel(model.id));
+        dropdown.appendChild(item);
+      });
+      dropdown.classList.add('visible');
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      spinner.style.display = 'none';
+      dropdown.innerHTML = `<div class="hf-dropdown-empty">${t('hf_error')}</div>`;
+      dropdown.classList.add('visible');
+    }
+  }
+
+  async function selectModel(modelId) {
+    hideDropdown();
+    searchInput.value = modelId;
+    spinner.style.display = 'block';
+
+    // Clear active preset
+    document.querySelectorAll('#presetBar button').forEach(b => b.classList.remove('active'));
+
+    try {
+      // Fetch config.json and model details (for safetensors param count) in parallel
+      const [configResp, modelResp] = await Promise.allSettled([
+        fetch(`https://huggingface.co/${modelId}/resolve/main/config.json`),
+        fetch(`https://huggingface.co/api/models/${modelId}`)
+      ]);
+
+      spinner.style.display = 'none';
+
+      // Store model detail data if available
+      if (modelResp.status === 'fulfilled' && modelResp.value.ok) {
+        const modelDetail = await modelResp.value.json();
+        cachedModelData[modelId] = { ...cachedModelData[modelId], ...modelDetail };
+      }
+
+      if (configResp.status === 'fulfilled' && configResp.value.ok) {
+        const config = await configResp.value.json();
+        applyConfig(config, modelId);
+      } else {
+        // Config fetch failed — try to use what we have from search/detail data
+        const model = cachedModelData[modelId];
+        if (model) applyFromSearchData(model);
+      }
+    } catch (e) {
+      spinner.style.display = 'none';
+      const model = cachedModelData[modelId];
+      if (model) applyFromSearchData(model);
+    }
+  }
+
+  function applyConfig(config, modelId) {
+    // hidden_size
+    if (config.hidden_size) {
+      setField('hidden', 'hiddenNum', 'hiddenHint', config.hidden_size, v => v);
+    }
+
+    // num_hidden_layers
+    if (config.num_hidden_layers) {
+      setField('layers', 'layersNum', 'layerHint', config.num_hidden_layers, v => v);
+    }
+
+    // num_attention_heads
+    if (config.num_attention_heads) {
+      setField('heads', 'headsNum', 'headsHint', config.num_attention_heads, v => v);
+    }
+
+    // num_key_value_heads → detect attention type
+    const nHeads = config.num_attention_heads || 32;
+    let kvHeads = config.num_key_value_heads;
+    if (kvHeads != null) {
+      setField('kvHeads', 'kvHeadsNum', 'kvHeadsHint', kvHeads, v => v);
+      if (kvHeads === 1) {
+        $('attnType').value = 'mqa';
+      } else if (kvHeads < nHeads) {
+        $('attnType').value = 'gqa';
+      } else {
+        $('attnType').value = 'mha';
+      }
+    } else {
+      // No KV heads specified → MHA, KV heads = attention heads
+      setField('kvHeads', 'kvHeadsNum', 'kvHeadsHint', nHeads, v => v);
+      $('attnType').value = 'mha';
+    }
+
+    // max_position_embeddings → context length
+    const maxPos = config.max_position_embeddings || config.n_positions || config.seq_length;
+    if (maxPos) {
+      const ctxVal = Math.min(maxPos, 131072);
+      setField('context', 'contextNum', 'ctxHint', ctxVal, v => Number(v).toLocaleString('de-DE'));
+    }
+
+    // Parameter count: try safetensors from search data, then estimate
+    const model = cachedModelData[modelId];
+    let paramB = extractParamBillions(model);
+    if (!paramB && config.hidden_size && config.num_hidden_layers && config.vocab_size) {
+      paramB = estimateParams(config);
+    }
+    if (paramB) {
+      const clamped = Math.min(Math.max(paramB, 0.1), 500);
+      const rounded = Math.round(clamped * 10) / 10;
+      setField('params', 'paramsNum', 'paramHint', rounded, v => v + 'B');
+    }
+
+    calc();
+  }
+
+  function applyFromSearchData(model) {
+    // Only parameter count available from search data
+    const paramB = extractParamBillions(model);
+    if (paramB) {
+      const clamped = Math.min(Math.max(paramB, 0.1), 500);
+      const rounded = Math.round(clamped * 10) / 10;
+      setField('params', 'paramsNum', 'paramHint', rounded, v => v + 'B');
+      calc();
+    }
+  }
+
+  function setField(sliderId, numId, hintId, value, fmtFn) {
+    const s = $(sliderId), n = $(numId), h = $(hintId);
+    s.value = value;
+    n.value = value;
+    h.textContent = fmtFn(value);
+  }
+
+  function extractParamBillions(model) {
+    if (!model) return null;
+    // Try safetensors metadata
+    if (model.safetensors && model.safetensors.total) {
+      return model.safetensors.total / 1e9;
+    }
+    return null;
+  }
+
+  function extractParamSize(model) {
+    const b = extractParamBillions(model);
+    if (b == null) return '';
+    if (b >= 1) return b.toFixed(1) + 'B';
+    return (b * 1000).toFixed(0) + 'M';
+  }
+
+  function estimateParams(config) {
+    // Rough transformer parameter estimate
+    const h = config.hidden_size;
+    const L = config.num_hidden_layers;
+    const V = config.vocab_size || 32000;
+    const ffnDim = config.intermediate_size || 4 * h;
+    // Per layer: 4*h*h (attn) + 2*h*ffnDim (FFN) + small terms
+    const perLayer = 4 * h * h + 2 * h * ffnDim;
+    const embedding = V * h;
+    const total = L * perLayer + 2 * embedding;
+    return total / 1e9;
+  }
+
+  function formatDownloads(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+})();
 
 // ==================== Init ====================
 const savedLang = localStorage.getItem('llm-calc-lang') || 'en';
